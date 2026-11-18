@@ -1,46 +1,46 @@
+
 "use client";
 
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 
-const sampleRides = [
-  {
-    id: 1,
-    name: "Rahul K.",
-    from: "Hyderabad",
-    to: "Vijayawada",
-    date: "Nov 20",
-    time: "8:00 AM",
-    seats: 2,
-    price: "₹450",
-    initials: "RK",
-    color: "bg-indigo-100 text-indigo-700",
-  },
-  {
-    id: 2,
-    name: "Priya S.",
-    from: "Bangalore",
-    to: "Chennai",
-    date: "Nov 21",
-    time: "7:30 AM",
-    seats: 3,
-    price: "₹550",
-    initials: "PS",
-    color: "bg-rose-100 text-rose-700",
-  },
-  {
-    id: 3,
-    name: "Arjun M.",
-    from: "Hyderabad",
-    to: "Warangal",
-    date: "Nov 22",
-    time: "9:00 AM",
-    seats: 1,
-    price: "₹250",
-    initials: "AM",
-    color: "bg-emerald-100 text-emerald-700",
-  },
+type Ride = {
+  id: string | number;
+  driverName: string;
+  pickup: string;
+  destination: string;
+  date: string;
+  availableSeats: number;
+  price: string | number;
+};
+
+const avatarStyles = [
+  "bg-indigo-100 text-indigo-700",
+  "bg-rose-100 text-rose-700",
+  "bg-emerald-100 text-emerald-700",
+  "bg-amber-100 text-amber-700",
 ];
+
+function formatRideDate(value: string) {
+  const datePart = value.slice(0, 10);
+  const [year, month, day] = datePart.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function getInitials(name: string) {
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
 
 const steps = [
   {
@@ -71,6 +71,14 @@ export default function Home() {
   const [today, setToday] = useState("");
   const [currentYear, setCurrentYear] = useState("");
 
+  const [rides, setRides] = useState<Ride[]>([]);
+  const [ridesLoading, setRidesLoading] = useState(true);
+  const [ridesError, setRidesError] = useState("");
+
+  const [publishing, setPublishing] = useState(false);
+  const [publishMessage, setPublishMessage] = useState("");
+  const [publishError, setPublishError] = useState(false);
+
   useEffect(() => {
     const date = new Date();
 
@@ -84,20 +92,185 @@ export default function Home() {
     setCurrentYear(String(date.getFullYear()));
   }, []);
 
+  async function loadRides() {
+    try {
+      setRidesLoading(true);
+      setRidesError("");
+
+      const response = await fetch("/api/rides", {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("The rides service returned an error.");
+      }
+
+      const data: {
+        success: boolean;
+        rides?: Ride[];
+        message?: string;
+      } = await response.json();
+
+      if (!data.success || !Array.isArray(data.rides)) {
+        throw new Error(data.message || "Could not load rides.");
+      }
+
+      setRides(data.rides);
+    } catch (error) {
+      console.error("Failed to load rides:", error);
+      setRidesError(
+        "We couldn't load rides. Please refresh and try again."
+      );
+    } finally {
+      setRidesLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadInitialRides() {
+      try {
+        const response = await fetch("/api/rides", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error("The rides service returned an error.");
+        }
+
+        const data: {
+          success: boolean;
+          rides?: Ride[];
+          message?: string;
+        } = await response.json();
+
+        if (!data.success || !Array.isArray(data.rides)) {
+          throw new Error(data.message || "Could not load rides.");
+        }
+
+        if (isMounted) {
+          setRides(data.rides);
+        }
+      } catch (error) {
+        console.error("Failed to load rides:", error);
+
+        if (isMounted) {
+          setRidesError(
+            "We couldn't load rides. Please refresh and try again."
+          );
+        }
+      } finally {
+        if (isMounted) {
+          setRidesLoading(false);
+        }
+      }
+    }
+
+    loadInitialRides();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const filteredRides = searched
+    ? rides.filter((ride) => {
+        const routeMatches =
+          ride.pickup
+            .toLowerCase()
+            .includes(pickup.trim().toLowerCase()) &&
+          ride.destination
+            .toLowerCase()
+            .includes(destination.trim().toLowerCase());
+
+        const dateMatches =
+          !travelDate || ride.date.slice(0, 10) === travelDate;
+
+        return routeMatches && dateMatches;
+      })
+    : rides;
+
   const handleSearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSearched(true);
   };
 
+  async function handlePublishRide(
+    event: FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+
+    setPublishing(true);
+    setPublishMessage("");
+    setPublishError(false);
+
+    const ride = {
+      driverName: String(formData.get("driverName") || "").trim(),
+      pickup: String(formData.get("pickup") || "").trim(),
+      destination: String(formData.get("destination") || "").trim(),
+      date: String(formData.get("date") || ""),
+      availableSeats: Number(formData.get("availableSeats")),
+      price: Number(formData.get("price")),
+    };
+
+    try {
+      const response = await fetch("/api/rides", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(ride),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(
+          result.error || result.message || "Unable to publish the ride."
+        );
+      }
+
+      setPublishMessage(
+        "Your ride has been published successfully!"
+      );
+
+      form.reset();
+
+      setSearched(false);
+      setPickup("");
+      setDestination("");
+      setTravelDate("");
+
+      await loadRides();
+    } catch (error) {
+      setPublishError(true);
+
+      setPublishMessage(
+        error instanceof Error
+          ? error.message
+          : "Something went wrong while publishing your ride."
+      );
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  const inputClass =
+    "w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100";
+
   return (
     <main className="min-h-screen overflow-hidden bg-slate-50 text-slate-900">
-      {/* Navigation */}
       <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/95 shadow-sm backdrop-blur">
         <nav className="mx-auto flex max-w-7xl flex-col gap-4 px-5 py-4 sm:px-6 md:flex-row md:items-center md:justify-between">
           <a href="#" className="flex items-center gap-2.5">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-xl font-bold text-white shadow-lg shadow-indigo-200">
               S
             </span>
+
             <span className="text-2xl font-extrabold tracking-tight">
               Student<span className="text-indigo-600">Ride</span>
             </span>
@@ -107,12 +280,11 @@ export default function Home() {
             <a href="#find-rides" className="transition hover:text-indigo-600">
               Find a ride
             </a>
-            <a
-              href="#how-it-works"
-              className="transition hover:text-indigo-600"
-            >
+
+            <a href="#how-it-works" className="transition hover:text-indigo-600">
               How it works
             </a>
+
             <a href="#offer-ride" className="transition hover:text-indigo-600">
               Offer a ride
             </a>
@@ -127,7 +299,6 @@ export default function Home() {
         </nav>
       </header>
 
-      {/* Hero Section */}
       <section className="relative overflow-hidden bg-[#171443] px-5 py-20 text-white sm:px-6 md:py-28">
         <div className="pointer-events-none absolute -right-32 -top-32 h-96 w-96 rounded-full bg-indigo-600/30 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-40 -left-32 h-96 w-96 rounded-full bg-violet-500/20 blur-3xl" />
@@ -179,12 +350,12 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Journey Preview */}
           <div className="hidden md:block">
             <div className="rounded-[2rem] border border-white/15 bg-white/10 p-5 shadow-2xl backdrop-blur">
               <div className="rounded-2xl bg-white p-7 text-slate-900 shadow-xl">
                 <div className="flex items-center justify-between gap-3">
                   <p className="font-bold">Your next journey</p>
+
                   <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
                     Shared travel
                   </span>
@@ -202,18 +373,14 @@ export default function Home() {
                       <p className="text-xs font-bold tracking-wider text-slate-400">
                         PICKUP
                       </p>
-                      <p className="mt-1 font-bold">
-                        Your college or city
-                      </p>
+                      <p className="mt-1 font-bold">Your college or city</p>
                     </div>
 
                     <div>
                       <p className="text-xs font-bold tracking-wider text-slate-400">
                         DESTINATION
                       </p>
-                      <p className="mt-1 font-bold">
-                        Your next destination
-                      </p>
+                      <p className="mt-1 font-bold">Your next destination</p>
                     </div>
                   </div>
                 </div>
@@ -243,7 +410,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Find Rides */}
       <section
         id="find-rides"
         className="scroll-mt-28 px-5 py-16 sm:px-6 md:py-20"
@@ -253,9 +419,11 @@ export default function Home() {
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-indigo-600">
               Start your journey
             </p>
+
             <h2 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
               Find your next ride
             </h2>
+
             <p className="mx-auto mt-3 max-w-xl leading-7 text-slate-500">
               Tell us where you are going. Plan your journey with fellow
               students.
@@ -269,6 +437,7 @@ export default function Home() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Pickup location
                   </span>
+
                   <input
                     required
                     value={pickup}
@@ -278,7 +447,7 @@ export default function Home() {
                     }}
                     placeholder="Enter your starting city"
                     autoComplete="off"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                    className={inputClass}
                   />
                 </label>
 
@@ -286,6 +455,7 @@ export default function Home() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Destination
                   </span>
+
                   <input
                     required
                     value={destination}
@@ -295,7 +465,7 @@ export default function Home() {
                     }}
                     placeholder="Where do you want to go?"
                     autoComplete="off"
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                    className={inputClass}
                   />
                 </label>
 
@@ -303,6 +473,7 @@ export default function Home() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Travel date
                   </span>
+
                   <input
                     required
                     type="date"
@@ -312,7 +483,7 @@ export default function Home() {
                       setTravelDate(event.target.value);
                       setSearched(false);
                     }}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-sm text-slate-700 outline-none transition hover:border-slate-300 focus:border-indigo-500 focus:bg-white focus:ring-4 focus:ring-indigo-100"
+                    className={inputClass}
                   />
                 </label>
               </div>
@@ -358,8 +529,8 @@ export default function Home() {
                 </div>
 
                 <p className="mt-4 text-sm leading-6 text-indigo-800">
-                  This is a search preview. Live ride search will be connected
-                  when we build the backend and database.
+                  Showing rides that match your pickup, destination, and
+                  travel date below.
                 </p>
               </div>
             )}
@@ -367,7 +538,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Example Rides */}
       <section
         id="example-rides"
         className="px-5 py-16 sm:px-6 md:py-20"
@@ -378,94 +548,140 @@ export default function Home() {
               <p className="text-sm font-bold uppercase tracking-[0.2em] text-indigo-600">
                 Explore journeys
               </p>
+
               <h2 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
-                Popular ride examples
+                {searched ? "Matching rides" : "Available rides"}
               </h2>
+
               <p className="mt-3 max-w-xl leading-7 text-slate-500">
-                See how journey and ride information will appear on StudentRide.
+                Rides published by drivers and saved in the StudentRide
+                database.
               </p>
             </div>
 
-            <span className="w-fit rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-xs font-bold text-amber-700">
-              Demo data · Not live rides
+            <span className="w-fit rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-bold text-emerald-700">
+              Live database data
             </span>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-3">
-            {sampleRides.map((ride) => (
-              <article
-                key={ride.id}
-                className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition duration-300 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-100/60"
-              >
-                <div className="flex items-center justify-between">
-                  <span className="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700">
-                    {ride.date}
-                  </span>
+          {ridesLoading ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500">
+              Loading available rides...
+            </div>
+          ) : ridesError ? (
+            <div
+              className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center text-rose-700"
+              role="alert"
+            >
+              {ridesError}
+            </div>
+          ) : filteredRides.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+              <h3 className="text-lg font-bold text-slate-800">
+                {searched
+                  ? "No matching rides found"
+                  : "No rides available yet"}
+              </h3>
 
-                  <p className="text-xl font-extrabold text-indigo-700">
-                    {ride.price}
-                  </p>
-                </div>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {searched
+                  ? "Try different locations or another travel date."
+                  : "When a driver publishes a ride, it will appear here."}
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="mb-5 text-sm text-slate-500" aria-live="polite">
+                {filteredRides.length}{" "}
+                {filteredRides.length === 1 ? "ride" : "rides"} found
+              </p>
 
-                <div className="my-7 space-y-5">
-                  <div className="flex gap-4">
-                    <div className="mt-1 flex flex-col items-center">
-                      <span className="h-3 w-3 rounded-full bg-indigo-600 ring-4 ring-indigo-50" />
-                      <span className="h-8 border-l-2 border-dashed border-slate-300" />
-                      <span className="h-3 w-3 rounded-full bg-emerald-500 ring-4 ring-emerald-50" />
-                    </div>
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {filteredRides.map((ride, index) => {
+                  const initials = getInitials(ride.driverName) || "D";
+                  const avatarStyle =
+                    avatarStyles[index % avatarStyles.length];
 
-                    <div className="space-y-5">
-                      <div>
-                        <p className="text-xs font-bold tracking-wider text-slate-400">
-                          FROM
-                        </p>
-                        <p className="mt-1 font-bold text-slate-800">
-                          {ride.from}
-                        </p>
-                      </div>
-
-                      <div>
-                        <p className="text-xs font-bold tracking-wider text-slate-400">
-                          TO
-                        </p>
-                        <p className="mt-1 font-bold text-slate-800">
-                          {ride.to}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-100 pt-5">
-                  <div className="flex items-center gap-3">
-                    <span
-                      className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-extrabold ${ride.color}`}
+                  return (
+                    <article
+                      key={ride.id}
+                      className="group rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition duration-300 hover:-translate-y-1 hover:border-indigo-200 hover:shadow-xl hover:shadow-indigo-100/60"
                     >
-                      {ride.initials}
-                    </span>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="rounded-lg bg-indigo-50 px-3 py-2 text-xs font-bold text-indigo-700">
+                          {formatRideDate(ride.date)}
+                        </span>
 
-                    <div>
-                      <p className="text-sm font-bold text-slate-800">
-                        {ride.name}
-                      </p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {ride.time}
-                      </p>
-                    </div>
-                  </div>
+                        <p className="text-xl font-extrabold text-indigo-700">
+                          ₹{Number(ride.price).toLocaleString("en-IN")}
+                        </p>
+                      </div>
 
-                  <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
-                    {ride.seats} seats
-                  </span>
-                </div>
-              </article>
-            ))}
-          </div>
+                      <div className="my-7 space-y-5">
+                        <div className="flex gap-4">
+                          <div className="mt-1 flex flex-col items-center">
+                            <span className="h-3 w-3 rounded-full bg-indigo-600 ring-4 ring-indigo-50" />
+                            <span className="h-8 border-l-2 border-dashed border-slate-300" />
+                            <span className="h-3 w-3 rounded-full bg-emerald-500 ring-4 ring-emerald-50" />
+                          </div>
+
+                          <div className="space-y-5">
+                            <div>
+                              <p className="text-xs font-bold tracking-wider text-slate-400">
+                                FROM
+                              </p>
+
+                              <p className="mt-1 font-bold text-slate-800">
+                                {ride.pickup}
+                              </p>
+                            </div>
+
+                            <div>
+                              <p className="text-xs font-bold tracking-wider text-slate-400">
+                                TO
+                              </p>
+
+                              <p className="mt-1 font-bold text-slate-800">
+                                {ride.destination}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between border-t border-slate-100 pt-5">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`flex h-11 w-11 items-center justify-center rounded-full text-sm font-extrabold ${avatarStyle}`}
+                          >
+                            {initials}
+                          </span>
+
+                          <div>
+                            <p className="text-sm font-bold text-slate-800">
+                              {ride.driverName}
+                            </p>
+
+                            <p className="mt-1 text-xs text-slate-500">
+                              Driver
+                            </p>
+                          </div>
+                        </div>
+
+                        <span className="rounded-lg bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-600">
+                          {ride.availableSeats}{" "}
+                          {ride.availableSeats === 1 ? "seat" : "seats"}
+                        </span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       </section>
 
-      {/* How It Works */}
       <section
         id="how-it-works"
         className="scroll-mt-28 bg-white px-5 py-20 sm:px-6"
@@ -475,9 +691,11 @@ export default function Home() {
             <p className="text-sm font-bold uppercase tracking-[0.2em] text-indigo-600">
               Simple and convenient
             </p>
+
             <h2 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
               How StudentRide works
             </h2>
+
             <p className="mt-4 leading-7 text-slate-500">
               Three simple steps to make your next journey easier.
             </p>
@@ -506,43 +724,153 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Offer a Ride */}
       <section
         id="offer-ride"
         className="scroll-mt-28 px-5 py-16 sm:px-6"
       >
-        <div className="relative mx-auto flex max-w-7xl flex-col items-center justify-between gap-8 overflow-hidden rounded-3xl bg-indigo-600 px-7 py-12 text-center text-white shadow-xl shadow-indigo-200 sm:px-12 md:flex-row md:text-left">
-          <div className="pointer-events-none absolute -right-20 -top-24 h-72 w-72 rounded-full bg-white/10 blur-3xl" />
-
-          <div className="relative">
-            <p className="text-sm font-bold uppercase tracking-[0.2em] text-indigo-200">
+        <div className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white p-6 shadow-xl shadow-slate-200/60 sm:p-10">
+          <div className="mb-8 text-center">
+            <p className="text-sm font-bold uppercase tracking-[0.2em] text-indigo-600">
               Make every seat count
             </p>
 
-            <h2 className="mt-3 text-3xl font-extrabold sm:text-4xl">
-              Have an empty seat?
+            <h2 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
+              Offer a ride
             </h2>
 
-            <p className="mt-4 max-w-xl leading-7 text-indigo-100">
-              Share your journey with fellow students and help make student
-              travel more connected and affordable.
-            </p>
-
-            <p className="mt-4 text-sm font-semibold text-indigo-200">
-              Ride publishing will be available when the backend is built.
+            <p className="mx-auto mt-4 max-w-xl leading-7 text-slate-500">
+              Share your journey with fellow students. Enter your trip
+              details below to publish your ride.
             </p>
           </div>
 
-          <a
-            href="#example-rides"
-            className="relative shrink-0 rounded-xl bg-white px-7 py-3.5 text-sm font-extrabold text-indigo-700 shadow-lg transition hover:-translate-y-1 hover:bg-indigo-50"
-          >
-            Explore ride examples →
-          </a>
+          <form onSubmit={handlePublishRide}>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <label className="block sm:col-span-2">
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Driver name
+                </span>
+
+                <input
+                  name="driverName"
+                  type="text"
+                  required
+                  maxLength={100}
+                  placeholder="Enter your full name"
+                  className={inputClass}
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Pickup location
+                </span>
+
+                <input
+                  name="pickup"
+                  type="text"
+                  required
+                  maxLength={150}
+                  placeholder="Example: Tanuku"
+                  className={inputClass}
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Destination
+                </span>
+
+                <input
+                  name="destination"
+                  type="text"
+                  required
+                  maxLength={150}
+                  placeholder="Example: Hyderabad"
+                  className={inputClass}
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Travel date
+                </span>
+
+                <input
+                  name="date"
+                  type="date"
+                  required
+                  min={today}
+                  className={inputClass}
+                />
+              </label>
+
+              <label className="block">
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Available seats
+                </span>
+
+                <input
+                  name="availableSeats"
+                  type="number"
+                  required
+                  min="1"
+                  max="50"
+                  step="1"
+                  placeholder="Example: 3"
+                  className={inputClass}
+                />
+              </label>
+
+              <label className="block sm:col-span-2">
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Price per passenger (₹)
+                </span>
+
+                <input
+                  name="price"
+                  type="number"
+                  required
+                  min="0"
+                  max="100000"
+                  step="0.01"
+                  placeholder="Example: 500"
+                  className={inputClass}
+                />
+              </label>
+            </div>
+
+            {publishMessage && (
+              <div
+                className={`mt-6 rounded-xl border p-4 text-sm ${
+                  publishError
+                    ? "border-rose-200 bg-rose-50 text-rose-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                }`}
+                role="status"
+                aria-live="polite"
+              >
+                {publishMessage}
+              </div>
+            )}
+
+            <div className="mt-8 border-t border-slate-100 pt-6">
+              <button
+                type="submit"
+                disabled={publishing || !today}
+                className="w-full rounded-xl bg-indigo-600 px-8 py-4 text-sm font-bold text-white shadow-lg shadow-indigo-200 transition hover:-translate-y-0.5 hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {publishing ? "Publishing your ride..." : "Publish ride →"}
+              </button>
+
+              <p className="mt-4 text-center text-xs leading-5 text-slate-400">
+                Your ride details will be saved in the StudentRide database.
+              </p>
+            </div>
+          </form>
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="border-t border-slate-200 bg-white px-5 py-8 sm:px-6">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 text-center sm:flex-row sm:text-left">
           <a href="#" className="text-xl font-extrabold">
